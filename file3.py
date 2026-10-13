@@ -1,0 +1,87 @@
+
+
+snmVSIUY  OUSDU  W;LSD;a
+xs';A
+X
+XLsvxhgSBX;KsvxgfvSX';
+xaSTXHAs'xc;laSKXJGsx
+'S;LXKNAgsxAs";Xas;klxhA,SMX
+]sxAXCF FV SCV CVCS XX
+# The whole stack in FOUR services:
+#   mariadb, redis, backend (self-contained ERPNext), frontend (React portal).
+#
+#   docker compose up -d --build
+#
+# The backend container does everything ERPNext: bootstraps/migrates the site
+# on start (first boot takes several minutes — watch `docker compose logs -f
+# backend`), then runs gunicorn + background worker + scheduler behind the
+# image's own nginx on :8080 (which also serves the ERPNext desk UI).
+# One Redis serves cache (DB /0) and queue (DB /1).
+#
+# Portal: http://localhost:3000    ERPNext desk: http://localhost:8080
+# Demo logins (password = ADMIN_PASSWORD, default "admin"):
+#   citizen@example.gy (citizen) · underwriter@gdb.gov.gy (underwriter)
+#   Administrator (ERPNext admin)
+services:
+  mariadb:
+    image: mariadb:11.8
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --skip-character-set-client-handshake
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-admin}
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    healthcheck:
+      test: ['CMD', 'healthcheck.sh', '--connect', '--innodb_initialized']
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  redis:
+    image: redis:6.2-alpine
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    image: gdb-backend:local
+    environment:
+      SITE_NAME: ${SITE_NAME:-gdb.localhost}
+      DB_HOST: mariadb
+      DB_PORT: '3306'
+      REDIS_CACHE: redis:6379/0
+      REDIS_QUEUE: redis:6379/1
+      DB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
+      WITH_WORKER: '1'
+      WITH_SCHEDULER: '1'
+      WITH_SOCKETIO: '0'
+    volumes:
+      - sites:/home/frappe/frappe-bench/sites
+    ports:
+      - '${BACKEND_PORT:-8080}:8080'
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    image: gdb-frontend:local
+    environment:
+      BACKEND_URL: http://backend:8080
+      FRAPPE_SITE_NAME: ${SITE_NAME:-gdb.localhost}
+    ports:
+      - '${FRONTEND_PORT:-3000}:80'
+    depends_on:
+      backend:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  sites:
+  mariadb-data:
